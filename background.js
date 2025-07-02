@@ -12,10 +12,13 @@ function saveChapterToFile(
   novelTitle,
   chapterNumber,
   content,
-  downloadDir
+  downloadDir,
+  isFinalFile = false
 ) {
   // 构建文件路径，包含下载目录
-  const filename = `${downloadDir}/${novelTitle}-${chapterNumber}.txt`;
+  const filename = isFinalFile
+    ? `${downloadDir}/${novelTitle}.txt`
+    : `${downloadDir}/${novelTitle}-${chapterNumber}.txt`;
 
   // 创建Blob对象
   const blob = new Blob([content], { type: "text/plain" });
@@ -25,11 +28,11 @@ function saveChapterToFile(
     chrome.downloads.download({
       url: reader.result,
       filename: filename,
-      saveAs: false,
+      saveAs: false, 
     });
 
     // 标记该会话已选择保存路径
-    if (chapterNumber === 1) {
+    if (chapterNumber === 1 || isFinalFile) {
       const session = downloadSessions.get(sessionId) || {};
       session.savePathSelected = true;
       downloadSessions.set(sessionId, session);
@@ -59,11 +62,47 @@ async function checkPageLoaded(tabId, timeout = 60000, interval = 500) {
   }
   return false;
 }
+// 合并所有章节内容并下载
+function mergeAndDownloadAllChapters(sessionId) {
+  const session = downloadSessions.get(sessionId);
+  if (!session || !session.chapters || session.chapters.length === 0) {
+    console.error("没有可合并的章节内容");
+    return;
+  }
+
+  // 按章节顺序排序
+  session.chapters.sort((a, b) => a.chapterNumber - b.chapterNumber);
+
+  // 合并所有章节内容
+  let mergedContent = `${session.novelTitle}\n\n`;
+  for (const chapter of session.chapters) {
+    mergedContent += chapter.content;
+  }
+
+  // 下载合并后的文件
+  saveChapterToFile(
+    sessionId,
+    session.novelTitle,
+    0, // 不使用章节编号
+    mergedContent,
+    session.downloadDir,
+    true // 标记为最终文件
+  );
+}
+
 // 继续下载后续章节
-async function continueDownloadChapters(sessionId, remainingChapters, originalTabId) {
+async function continueDownloadChapters(
+  sessionId,
+  remainingChapters,
+  originalTabId
+) {
   if (remainingChapters <= 0) {
-    // 下载完成，清理会话
-    downloadSessions.delete(sessionId);
+    // 下载完成，合并所有章节并下载
+    mergeAndDownloadAllChapters(sessionId);
+    // 清理会话
+    setTimeout(() => {
+      downloadSessions.delete(sessionId);
+    }, 5000); // 延迟删除会话，确保合并文件下载完成
     return;
   }
 
@@ -116,7 +155,7 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         if (result && result.status === "success") break;
       } catch (e) {
         console.warn(`第${i + 1}次提取内容失败，重试中...`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
@@ -130,7 +169,6 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
 
       // 更新会话中的下一章URL
       session.nextUrl = result.data.nextUrl;
-      downloadSessions.set(sessionId, session);
 
       // 当前章节编号
       const currentChapterNum =
@@ -143,14 +181,15 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         result.data.content
       );
 
-      // 保存章节内容
-      saveChapterToFile(
-        sessionId,
-        session.novelTitle,
-        currentChapterNum,
-        chapterContent,
-        session.downloadDir
-      );
+      // 存储章节内容到会话中
+      if (!session.chapters) {
+        session.chapters = [];
+      }
+      session.chapters.push({
+        chapterNumber: currentChapterNum,
+        title: result.data.title,
+        content: chapterContent,
+      });
 
       // 更新已下载章节计数
       session.downloadedCount++;
@@ -162,7 +201,11 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         await chrome.tabs.remove(tab.id);
 
         // 继续下载下一章
-        await continueDownloadChapters(sessionId, remainingChapters - 1, originalTabId);
+        await continueDownloadChapters(
+          sessionId,
+          remainingChapters - 1,
+          originalTabId
+        );
       } else {
         if (originalTabId) {
           chrome.tabs.sendMessage(originalTabId, {
@@ -185,13 +228,18 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         // 下载完成，关闭标签页
         await chrome.tabs.remove(tab.id);
 
+        // 合并所有章节并下载
+        mergeAndDownloadAllChapters(sessionId);
 
-        // 清理会话
-        downloadSessions.delete(sessionId);
+        // 延迟清理会话
+        setTimeout(() => {
+          downloadSessions.delete(sessionId);
+        }, 5000);
       }
     } else {
       // 提取失败，关闭标签页
       // await chrome.tabs.remove(tab.id);
+      alert("提取章节内容失败")
       console.error("提取章节内容失败", result);
       // 清理会话
       downloadSessions.delete(sessionId);
@@ -202,7 +250,6 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
     downloadSessions.delete(sessionId);
   }
 }
-
 
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   if (request.action === "startNovelDownload") {
@@ -229,30 +276,34 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       startChapterNum: 1,
       downloadedCount: 0,
       isActive: true,
+      chapters: [], // 初始化章节内容数组
     });
 
-    // 保存第一章
+    // 格式化第一章内容
     const firstChapterContent = formatChapterContent(
       1,
       chapterTitle,
       chapterContent
     );
-    saveChapterToFile(
-      sessionId,
-      novelTitle,
-      1,
-      firstChapterContent,
-      downloadDir
-    );
+
+    // 存储第一章内容
+    const session = downloadSessions.get(sessionId);
+    session.chapters.push({
+      chapterNumber: 1,
+      title: chapterTitle,
+      content: firstChapterContent,
+    });
 
     // 更新已下载章节计数
-    const session = downloadSessions.get(sessionId);
     session.downloadedCount++;
     downloadSessions.set(sessionId, session);
 
     // 如果需要下载多章，继续下载后续章节
     if (chapterCount > 1 && nextUrl) {
       continueDownloadChapters(sessionId, chapterCount - 1, sender.tab.id);
+    } else {
+      // 只有一章，直接合并下载
+      mergeAndDownloadAllChapters(sessionId);
     }
 
     sendResponse({ status: "started", sessionId: sessionId });
@@ -302,7 +353,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
 
     sendResponse({
       isDownloading: isDownloading,
-      sessionId: activeSessionId
+      sessionId: activeSessionId,
     });
   }
   return true;
