@@ -40,7 +40,7 @@ function saveChapterToFile(
 
 // 格式化章节内容
 function formatChapterContent(chapterNumber, title, content) {
-  return `第${chapterNumber}章 ${title}\n\n${content}\n\n`;
+  return `${title}\n\n${content}\n\n`;
 }
 async function checkPageLoaded(tabId, timeout = 60000, interval = 500) {
   const start = Date.now();
@@ -91,7 +91,7 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
     session.tabId = tab.id;
     downloadSessions.set(sessionId, session);
 
-    // 等待页面加载完成（使用智能检测）
+    // 等待页面加载完成
     const pageLoaded = await checkPageLoaded(tab.id);
     if (!pageLoaded) {
       console.error("页面加载超时");
@@ -107,9 +107,18 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
     }
 
     // 执行content script提取章节内容
-    const result = await chrome.tabs.sendMessage(tab.id, {
-      action: "extractChapterContent",
-    });
+    let result = null;
+    for (let i = 0; i < 30; i++) {
+      try {
+        result = await chrome.tabs.sendMessage(tab.id, {
+          action: "extractChapterContent",
+        });
+        if (result && result.status === "success") break;
+      } catch (e) {
+        console.warn(`第${i + 1}次提取内容失败，重试中...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
 
     if (result && result.status === "success") {
       // 再次检查下载是否被停止
@@ -182,7 +191,7 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
       }
     } else {
       // 提取失败，关闭标签页
-      await chrome.tabs.remove(tab.id);
+      // await chrome.tabs.remove(tab.id);
       console.error("提取章节内容失败", result);
       // 清理会话
       downloadSessions.delete(sessionId);

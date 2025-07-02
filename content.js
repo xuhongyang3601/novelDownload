@@ -1,12 +1,3 @@
-// 全局变量存储小说信息
-let novelInfo = {
-  title: "",
-  currentChapterUrl: "",
-  nextChapterUrl: "",
-  chapterTitle: "",
-  chapterContent: "",
-  chapterNumber: 1,
-};
 
 let notificationBox = null;
 
