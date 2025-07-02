@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小说下载</title>
+    <style>
+      body {
+        width: 250px;
+        padding: 10px;
+        font-family: sans-serif;
+      }
+      input,
+      select {
+        width: 100%;
+        margin-bottom: 10px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      .button-group {
+        display: flex;
+        gap: 10px;
+      }
+      .button-group button {
+        flex: 1;
+      }
+      #stopDownload {
+        background-color: #f44336;
+        color: white;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>小说下载器</h3>
+
+    <label for="chapterCount">下载章节数</label>
+    <input type="number" id="chapterCount" placeholder="输入章节数" />
+
+    <label for="downloadDir">下载目录</label>
+    <input
+      type="text"
+      id="downloadDir"
+      placeholder="输入下载目录名称"
+      value="novels"
+    />
+
+    <div class="button-group">
+      <button id="startDownload">开始下载</button>
+      <button id="stopDownload">停止下载</button>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
