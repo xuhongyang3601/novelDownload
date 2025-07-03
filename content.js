@@ -1,4 +1,3 @@
-
 let notificationBox = null;
 
 // 创建提示框
@@ -51,7 +50,10 @@ function showNotification(message) {
 }
 // 检测是否是起点中文网的小说页面
 function isQidianNovelPage() {
-  return window.location.href.includes("qidian.com");
+  return (
+    window.location.href.includes("qidian.com") ||
+    window.location.href.includes("qdmm.com")
+  );
 }
 
 // 获取小说标题
@@ -102,7 +104,12 @@ function getCurrentChapterInfo() {
   };
 }
 function isPageLoaded() {
-  return !!document.querySelector(".print>h1");
+  return (
+    !!document.querySelector(".print>h1") &&
+    !!document.querySelector(".print>.content") &&
+    document.querySelectorAll(".nav-btn-group .nav-btn") &&
+    document.querySelectorAll(".nav-btn-group .nav-btn").length
+  );
 }
 // 监听来自popup或background的消息
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
@@ -167,7 +174,8 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   } else if (request.action === "checkPageLoaded") {
     const loaded = isPageLoaded();
     sendResponse({ status: "success", data: { loaded } });
-  } if (request.action === "showDownloadCompleteNotification") {
+  }
+  if (request.action === "showDownloadCompleteNotification") {
     const { novelTitle, filePath } = request.data;
     showNotification(`《${novelTitle}》已成功下载到: ${filePath}`);
     sendResponse({ status: "success" });

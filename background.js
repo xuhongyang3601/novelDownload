@@ -28,7 +28,7 @@ function saveChapterToFile(
     chrome.downloads.download({
       url: reader.result,
       filename: filename,
-      saveAs: false, 
+      saveAs: false,
     });
 
     // 标记该会话已选择保存路径
@@ -45,7 +45,7 @@ function saveChapterToFile(
 function formatChapterContent(chapterNumber, title, content) {
   return `${title}\n\n${content}\n\n`;
 }
-async function checkPageLoaded(tabId, timeout = 60000, interval = 500) {
+async function checkPageLoaded(tabId, timeout = 60000, interval = 1000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     try {
@@ -91,11 +91,7 @@ function mergeAndDownloadAllChapters(sessionId) {
 }
 
 // 继续下载后续章节
-async function continueDownloadChapters(
-  sessionId,
-  remainingChapters,
-  originalTabId
-) {
+async function continueDownloadChapters(sessionId, remainingChapters, originalTabId) {
   if (remainingChapters <= 0) {
     // 下载完成，合并所有章节并下载
     mergeAndDownloadAllChapters(sessionId);
@@ -105,10 +101,10 @@ async function continueDownloadChapters(
     }, 5000); // 延迟删除会话，确保合并文件下载完成
     return;
   }
-
+  // 获取会话信息
+  const session = downloadSessions.get(sessionId);
   try {
-    // 获取会话信息
-    const session = downloadSessions.get(sessionId);
+
     if (!session) {
       console.error("找不到下载会话:", sessionId);
       return;
@@ -121,10 +117,27 @@ async function continueDownloadChapters(
     }
 
     // 创建一个新标签页来加载下一章
-    const tab = await chrome.tabs.create({
-      url: session.nextUrl,
-      active: false,
-    });
+    let tab;
+    let retryCount = 0;
+    const maxRetries = 10;
+
+    while (retryCount < maxRetries) {
+      try {
+        tab = await chrome.tabs.create({
+          url: session.nextUrl,
+          active: false
+        });
+        break;
+      } catch (error) {
+        if (error.message.includes('Tabs cannot be edited right now') &&
+          retryCount < maxRetries - 1) {
+          retryCount++;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+        throw error;
+      }
+    }
 
     // 更新会话中的标签页ID
     session.tabId = tab.id;
@@ -158,7 +171,6 @@ async function continueDownloadChapters(
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
-
     if (result && result.status === "success") {
       // 再次检查下载是否被停止
       if (!downloadSessions.get(sessionId)?.isActive) {
@@ -239,14 +251,21 @@ async function continueDownloadChapters(
     } else {
       // 提取失败，关闭标签页
       // await chrome.tabs.remove(tab.id);
-      alert("提取章节内容失败")
+
+      // 如果有已下载章节，则合并并下载
+      if (session.chapters && session.chapters.length > 0) {
+        mergeAndDownloadAllChapters(sessionId);
+      }
+
       console.error("提取章节内容失败", result);
       // 清理会话
       downloadSessions.delete(sessionId);
     }
   } catch (error) {
-    console.error("下载章节时出错:", error);
-    // 出错时也要清理会话
+    console.error('创建标签页失败:', error);
+    if (session?.chapters?.length > 0) {
+      mergeAndDownloadAllChapters(sessionId, true);
+    }
     downloadSessions.delete(sessionId);
   }
 }
