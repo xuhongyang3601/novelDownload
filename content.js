@@ -104,12 +104,13 @@ function getCurrentChapterInfo() {
   };
 }
 function isPageLoaded() {
-  return (
-    !!document.querySelector(".print>h1") &&
-    !!document.querySelector(".print>.content") &&
-    document.querySelectorAll(".nav-btn-group .nav-btn") &&
-    document.querySelectorAll(".nav-btn-group .nav-btn").length
-  );
+  const titleElement = document.querySelector(".print>h1");
+  const contentElements = document.querySelectorAll(".print>.content>p");
+  const navButtons = document.querySelectorAll(".nav-btn-group .nav-btn");
+
+  return !!(titleElement &&
+    contentElements.length &&
+    navButtons.length >= 2);
 }
 // 监听来自popup或background的消息
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {

@@ -40,26 +40,61 @@ function saveChapterToFile(
   };
   reader.readAsDataURL(blob);
 }
-
+function hashCode(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const character = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + character;
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
 // 格式化章节内容
 function formatChapterContent(chapterNumber, title, content) {
   return `${title}\n\n${content}\n\n`;
 }
-async function checkPageLoaded(tabId, timeout = 60000, interval = 1000) {
+async function checkPageLoaded(tabId, timeout = 60000, interval = 500) {
   const start = Date.now();
+  let lastContentHash = '';
+  let stableCount = 0;
+
   while (Date.now() - start < timeout) {
     try {
+      // 添加逐步延长的间隔时间
+      const currentInterval = Math.min(3000, interval + (Date.now() - start) / 1000);
       const response = await chrome.tabs.sendMessage(tabId, {
         action: "checkPageLoaded",
       });
       if (response?.data?.loaded) {
-        return true;
+        const contentCheck = await chrome.tabs.sendMessage(tabId, {
+          action: "extractChapterContent",
+        });
+        const currentContent = contentCheck?.data?.content || '';
+        const currentHash = hashCode(currentContent);
+
+        if (currentHash === lastContentHash) {
+          stableCount++;
+          if (stableCount >= 2) { // 连续两次内容稳定
+            console.log("页面内容已稳定加载");
+            return true;
+          }
+        } else {
+          lastContentHash = currentHash;
+          stableCount = 0;
+        }
       }
+
+      await new Promise(resolve => setTimeout(resolve, currentInterval));
     } catch (e) {
-      console.warn("页面通信失败，重试中...");
+      console.warn("页面通信失败，重试中...", e.message);
+      await new Promise(resolve => setTimeout(resolve, interval));
     }
-    await new Promise((resolve) => setTimeout(resolve, interval));
   }
+
+  console.error("页面加载超时", {
+    duration: Date.now() - start,
+    tabId: tabId
+  });
   return false;
 }
 // 合并所有章节内容并下载
@@ -101,9 +136,10 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
     }, 5000); // 延迟删除会话，确保合并文件下载完成
     return;
   }
-  // 获取会话信息
-  const session = downloadSessions.get(sessionId);
+
   try {
+    // 获取会话信息
+    const session = downloadSessions.get(sessionId);
 
     if (!session) {
       console.error("找不到下载会话:", sessionId);
@@ -116,45 +152,23 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
       return;
     }
 
-    // 创建一个新标签页来加载下一章
-    let tab;
-    let retryCount = 0;
-    const maxRetries = 10;
+    // 使用原始标签页ID来更新当前页面
+    const tabId = session.tabId;
 
-    while (retryCount < maxRetries) {
-      try {
-        tab = await chrome.tabs.create({
-          url: session.nextUrl,
-          active: false
-        });
-        break;
-      } catch (error) {
-        if (error.message.includes('Tabs cannot be edited right now') &&
-          retryCount < maxRetries - 1) {
-          retryCount++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    // 更新会话中的标签页ID
-    session.tabId = tab.id;
-    downloadSessions.set(sessionId, session);
-
+    // 跳转到下一章
+    await chrome.tabs.update(tabId, { url: session.nextUrl });
+    // // 添加延迟确保浏览器有时间开始加载新页面
+    // await new Promise(resolve => setTimeout(resolve, 1500));
     // 等待页面加载完成
-    const pageLoaded = await checkPageLoaded(tab.id);
+    const pageLoaded = await checkPageLoaded(tabId);
     if (!pageLoaded) {
       console.error("页面加载超时");
-      await chrome.tabs.remove(tab.id);
       return;
     }
 
     // 再次检查下载是否被停止
     if (!downloadSessions.get(sessionId)?.isActive) {
       console.log("下载在页面加载过程中被停止:", sessionId);
-      await chrome.tabs.remove(tab.id);
       return;
     }
 
@@ -162,7 +176,7 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
     let result = null;
     for (let i = 0; i < 30; i++) {
       try {
-        result = await chrome.tabs.sendMessage(tab.id, {
+        result = await chrome.tabs.sendMessage(tabId, {
           action: "extractChapterContent",
         });
         if (result && result.status === "success") break;
@@ -171,11 +185,11 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
+
     if (result && result.status === "success") {
       // 再次检查下载是否被停止
       if (!downloadSessions.get(sessionId)?.isActive) {
         console.log("下载在内容提取过程中被停止:", sessionId);
-        await chrome.tabs.remove(tab.id);
         return;
       }
 
@@ -209,9 +223,6 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
 
       // 继续下载下一章
       if (remainingChapters > 1 && result.data.nextUrl) {
-        // 关闭当前标签页
-        await chrome.tabs.remove(tab.id);
-
         // 继续下载下一章
         await continueDownloadChapters(
           sessionId,
@@ -238,7 +249,7 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
           console.warn("无法找到原始页面 tabId");
         }
         // 下载完成，关闭标签页
-        await chrome.tabs.remove(tab.id);
+        // await chrome.tabs.remove(tab.id);
 
         // 合并所有章节并下载
         mergeAndDownloadAllChapters(sessionId);
@@ -249,23 +260,14 @@ async function continueDownloadChapters(sessionId, remainingChapters, originalTa
         }, 5000);
       }
     } else {
-      // 提取失败，关闭标签页
-      // await chrome.tabs.remove(tab.id);
-
-      // 如果有已下载章节，则合并并下载
-      if (session.chapters && session.chapters.length > 0) {
-        mergeAndDownloadAllChapters(sessionId);
-      }
-
+      // 提取失败
       console.error("提取章节内容失败", result);
       // 清理会话
       downloadSessions.delete(sessionId);
     }
   } catch (error) {
-    console.error('创建标签页失败:', error);
-    if (session?.chapters?.length > 0) {
-      mergeAndDownloadAllChapters(sessionId, true);
-    }
+    console.error('页面操作失败:', error);
+    // 出错时也要清理会话
     downloadSessions.delete(sessionId);
   }
 }
@@ -339,7 +341,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       // 如果有打开的标签页，关闭它
       if (session.tabId) {
         try {
-          chrome.tabs.remove(session.tabId);
+          // chrome.tabs.remove(session.tabId);
         } catch (error) {
           console.error("关闭标签页失败:", error);
         }
